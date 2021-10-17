@@ -1,0 +1,325 @@
+---
+title: "By Catch Sea Turtle"
+author: "Akano Hammed A"
+date: "10/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+st = read.csv(file.choose())
+```
+
+
+```{r}
+head(st)
+```
+
+
+
+
+```{r}
+seaTurtle = st[, -1]
+head(seaTurtle)
+library(rgbif)
+attach(seaTurtle)
+library(ggplot2)
+
+# set extent the geographic extent
+
+max.lat = ceiling(max(latitude))
+min.lat = floor(min(latitude))
+max.lon = ceiling(max(longitude))
+min.lon = floor(min(longitude))
+max.lon
+min.lon
+geographic.extent = extent(x = c(min.lat, min.lon, max.lat, max.lon))
+geographic.extent
+
+```
+
+
+
+```{r}
+attach(seaTurtle)
+# Base map
+data(wrld_simpl)
+
+plot(wrld_simpl,
+     ylim = c(min.lon, max.lon),
+     xlim = c(min.lat, max.lat),   
+     axes = T,
+     col = "grey95")
+
+# individual obs points
+points(x = latitude,
+       y = longitude,
+       col = "red",
+       pch = 15,
+       cex = 0.75)
+
+box()
+seaTurtle
+```
+
+
+```{r}
+png("Bioclim model Parameters in West Africa.png")
+library(raster)
+library(rgdal)
+climateraster = getData("worldclim", var = "bio", res = 2.5, download = T)
+wdclimate = crop(climateraster, geographic.extent)
+wdclimate
+
+
+
+library(dismo)
+library(rgeos)
+bioclim.model = bioclim(wdclimate, seaTurtle)
+par(mfrow = c(4,4))
+response(bioclim.model)
+par(mfrow = c(1,1))
+save.image()
+```
+
+
+
+```{r}
+png("SeaturtleWA.png")
+seabioclim = predict(bioclim.model, wdclimate)
+plot(seabioclim, main = "SeaTurtle probability of occurence using bioclim model in West Africa")
+eval = evaluate(seaTurtle, bckg, bioclim.model, mask)
+eval
+plot(eval, "ROC")
+plot(seabioclim, main = "SeaTurtle probability of occurence West Africa(Bioclim)")
+eval
+save.image()
+```
+
+
+
+```{r}
+extractraster = cbind(seaTurtle, raster::extract(wdclimate, seaTurtle))
+any(is.na(extractraster))
+presenceseaTurtle = na.omit(extractraster)
+dim(extrabioclim)
+any(is.na(presenceseaTurtle))
+presenceseaTurtle$occ = 1
+head(presenceseaTurtle)
+```
+```{r}
+png("SeaTurtle Presence and absence.png")
+bckg = randomPoints(wdclimate, n = 100, ext = geographic.extent, extf = 1.25)
+data(wrld_simpl)
+
+plot(wrld_simpl,
+     ylim = c(min.lon, max.lon),
+     xlim = c(min.lat, max.lat),   
+     axes = T,
+     col = "grey35")
+points(bckg, pch = 1, col = "red", main = "Presence and pseudo-absence bioclim data")
+# individual obs points
+points(x = latitude,
+       y = longitude,
+       col = "green",
+       pch = 15,
+       cex = 0.75)
+
+box()
+
+
+plot(wrld_simpl,
+     xlim = c(min.lat, max.lat),
+     ylim = c(min.lon, max.lon),
+     col = "grey95",
+     axes = T)
+points(bckg, pch = 1, col = "red", main = "Presence and pseudo-absence bioclim data")
+points(x = latitude,
+       y = longitude,
+       col = "green",
+       pch = 20)
+
+box()
+geographic.extent
+save.image()
+```
+
+
+
+```{r}
+backg = data.frame(bckg)
+absenceseaT = cbind(backg, raster::extract(wdclimate, bckg))
+absenceseaT$occ = 0
+library(dplyr)
+absenceseaT = rename(absenceseaT, latitude = x)
+absenceseaT = rename(absenceseaT, longitude = y)
+absenceseaT = list2DF(absenceseaT)
+any(is.na(absenceseaT))
+pbSeaTurtleData = data.frame(rbind(presenceseaTurtle, absenceseaT))
+tail(pbSeaTurtleData)
+write("SeaTurtle Presence-abscence data.csv")
+```
+
+
+```{r}
+# Train data 
+library(caret)
+set.seed(1)
+
+trainIndex = createDataPartition(pbSeaTurtleData$occ, 
+                                 p = 0.65,
+                                 times = 1,
+                                 list = F)
+training = pbSeaTurtleData[trainIndex, ]
+testing = pbSeaTurtleData[-trainIndex, ]
+head(training)
+```
+```{r}
+# Model fitting
+attach(pbSeaTurtleData)
+occ = as.factor(training$occ)
+set.seed(825)
+train.Control = trainControl(method = "cv", number = 10)
+mod.fit = train(occ~bio4+bio19+bio10+bio18, data = training, method = "glm", trControl = train.Control, family = "binomial")
+summary(mod.fit)
+varImp(mod.fit)
+```
+```{r}
+# Test the model
+pred.glm = predict(mod.fit, newdata = testing)
+plot(pred.glm)
+```
+
+
+```{r}
+png("Generalized Linear Model.png")
+library(pROC)
+roc.glmodel = roc(testing[, "occ"], pred.glm)
+auc = auc(roc.glmodel)
+plot(roc.glmodel)
+text(0.5,0.5,paste("AUC [GLM] = ",format(auc, digits = 3, scientific = F)))
+save.image()
+```
+
+
+```{r}
+library(raster)
+names(pbSeaTurtleData)
+my_preds = c("bio4","bio10","bio19", "bio18")
+bioclim_df1 = data.frame(rasterToPoints(climateraster[[my_preds]]))
+any(is.na(bioclim_df1))
+names(bioclim_df1)
+```
+
+
+```{r}
+bioclim_df1 = na.omit(bioclim_df1)
+
+library(tidyselect)
+library(dplyr)
+bioclim_df1 = rename(bioclim_df1, latitude = x)
+bioclim_df1 = rename(bioclim_df1, longitude = y)
+names(bioclim_df1)
+```
+```{r}
+# regression model
+
+
+
+model = step(glm(occ ~ bio4 + bio10 + bio19 + bio18, family=binomial(link=logit), data= pbSeaTurtleData))
+summary(model)
+
+```
+
+
+```{r}
+p1 = predict(wdclimate, model, type = "response")
+plot(p1, main = "GLM Prediction Map")
+```
+
+
+```{r}
+png("crossvalSDM-GLM.png")
+my_preds = c("bio4", "bio10", "bio19", "bio18")
+
+preds_cv <- crossvalSDM(model, traindat = training, colname_species = 'occ', colname_pred = my_preds)
+
+
+plot(model$fitted.values[1:length(preds_cv)], preds_cv, xlab='Fitted values', ylab='Predicted values from CV')
+abline(0,1,col='red',lwd=2)
+save.image()
+```
+```{r}
+library(PresenceAbsence)
+
+
+# Cross-validated predictions:
+
+threshold_data <- data.frame(ID = seq_len(nrow(training)), obs = training$occ, pred = preds_cv)
+
+# Get the optimal thresholds:     
+(threshold_optimal <- PresenceAbsence::optimal.thresholds(DATA= threshold_data))
+```
+```{r}
+# Threshold using the max sen+spec
+
+# Print the confusion Matrix
+
+(cmx_maxSSS <- PresenceAbsence::cmx(DATA= threshold_data, threshold=threshold_optimal[3,2]))
+```
+```{r}
+library(AUC)
+library(pROC)
+# Let's have a look a the ROC curve:
+roc_cv <- roc(preds_cv, as.factor(training$occ))
+plot(roc_cv, col = "grey70", lwd = 2)
+```
+
+
+```{r}
+png("glm-evaluation.png")
+(evaluation_metrics = evalSDM(training$occ, preds_cv, thresh.method = "MaxSens+Spec"))
+save.image()
+```
+```{r}
+png("glm-evaluation2.png")
+(performance_glm <- evalSDM(testing$occ, predict(model, testing[,my_preds], type='response'), thresh.method =  "MaxSens+Spec"))
+save.image()
+```
+```{r}
+#bio_clim_df_2<- na.omit(bio_clim_df_2)
+
+#png("Seaturtle occurrence GLM.png")
+binary_glm <- predicted_glm <- rasterFromXYZ(cbind(bioclim_df1[,1:2],predict(model, bioclim_df1, type='response')))
+values(binary_glm) <- ifelse(values(predicted_glm)>= performance_glm$thresh, 1, 0)
+plot(stack(predicted_glm, binary_glm),
+     xlim = c(min.lat, max.lat),
+     ylim = c(min.lon, max.lon),
+     main=c('Probability of Occurrence-SeaTurtle','Binary Prediction-SeaTurtle'), axes=F)
+#save.image()
+```
+
+
+
+```{r}
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
